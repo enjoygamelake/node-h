@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>코멘트 시스템</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Pretendard', 'Arial', sans-serif;
+        }
+
+        body {
+            background-color: #f5f7fa;
+            color: #2d3748;
+            line-height: 1.6;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #2d3748;
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            text-align: center;
+            font-weight: 700;
+        }
+
+        h2 {
+            color: #4a5568;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        p {
+            color: #4a5568;
+            font-size: 1rem;
+            text-align: center;
+            margin-bottom: 2rem;
+            line-height: 1.5;
+        }
+
+        #map {
+            height: 500px;
+            width: 100%;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            margin-bottom: 2rem;
+        }
+
+        #commentsList {
+            list-style: none;
+            padding: 1rem;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        #commentsList li {
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            background: #f8fafc;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: transform 0.2s ease;
+        }
+
+        #commentsList li:hover {
+            transform: translateX(5px);
+            background: #edf2f7;
+        }
+
+        .comment-text {
+            flex-grow: 1;
+            margin-right: 1rem;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        button {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .edit-btn {
+            background: #4299e1;
+            color: white;
+        }
+
+        .edit-btn:hover {
+            background: #3182ce;
+        }
+
+        .delete-btn {
+            background: #f56565;
+            color: white;
+        }
+
+        .delete-btn:hover {
+            background: #e53e3e;
+        }
+
+        .location-info {
+            font-size: 0.8rem;
+            color: #718096;
+            margin-left: 0.5rem;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+
+            #map {
+                height: 400px;
+            }
+
+            #commentsList li {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .button-group {
+                margin-top: 1rem;
+                width: 100%;
+                justify-content: flex-end;
+            }
+        }
+    </style>
+    <script>
+        const socket = io();
+        const markers = [];
+        let map;
+        let currentLatLng;
+
+        const adminCode = 'admin1234';
+
+        window.onload = () => {
+            map = L.map('map').setView([37.5665, 126.978], 13);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+            }).addTo(map);
+
+            loadComments();
+
+            map.on('click', async (e) => {
+                currentLatLng = e.latlng;
+                const commentText = prompt('여기에 코멘트를 입력하세요.');
+
+                if (commentText) {
+                    const marker = L.marker(e.latlng).addTo(map);
+                    markers.push(marker);
+                    marker.bindPopup(commentText).openPopup();
+
+                    const newComment = {
+                        text: commentText,
+                        location: { lat: e.latlng.lat, lng: e.latlng.lng }
+                    };
+                    await fetch('/comments', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(newComment)
+                    });
+
+                    loadComments();
+                }
+            });
+        };
+
+        function addMarker(lat, lng, comment, index) {
+            const marker = L.marker([lat, lng]).addTo(map);
+            markers.push(marker);
+            marker.bindPopup(comment.text).openPopup();
+
+            marker.on('click', () => {
+                marker.getPopup().setContent(comment.text).openPopup();
+            });
+
+            marker.on('contextmenu', () => {
+                const confirmDelete = confirm('이 코멘트와 연결된 핀을 삭제하시겠습니까?');
+                if (confirmDelete) {
+                    deleteComment(index, marker);
+                }
+            });
+        }
+
+        async function loadComments() {
+            const response = await fetch('/comments');
+            const comments = await response.json();
+            const commentsList = document.getElementById('commentsList');
+            commentsList.innerHTML = '';
+
+            comments.forEach((comment, index) => {
+                const li = document.createElement('li');
+               
+                const commentText = document.createElement('span');
+                commentText.className = 'comment-text';
+                commentText.textContent = comment.text;
+                commentText.onclick = () => {
+                    // 코멘트를 클릭하면 해당 마커로 이동
+                    map.setView([comment.location.lat, comment.location.lng], 15);
+                };
+               
+                const locationInfo = document.createElement('span');
+                locationInfo.className = 'location-info';
+                locationInfo.textContent = `(${comment.location.lat.toFixed(4)}, ${comment.location.lng.toFixed(4)})`;
+
+                const buttonGroup = document.createElement('div');
+                buttonGroup.className = 'button-group';
+               
+                const editBtn = document.createElement('button');
+                editBtn.className = 'edit-btn';
+                editBtn.textContent = '수정';
+                editBtn.onclick = () => {
+                    const adminInput = prompt('관리자 코드를 입력하세요:');
+                    if (adminInput === adminCode) {
+                        const newText = prompt('새 코멘트를 입력하세요:', comment.text);
+                        if (newText) {
+                            const updatedComment = { text: newText, location: comment.location };
+                            updateComment(index, updatedComment);
+                        }
+                    } else {
+                        alert('관리자 코드가 올바르지 않습니다.');
+                    }
+                };
+               
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.textContent = '삭제';
+                deleteBtn.onclick = () => {
+                    const adminInput = prompt('관리자 코드를 입력하세요:');
+                    if (adminInput === adminCode) {
+                        const confirmDelete = confirm('이 코멘트를 삭제하시겠습니까?');
+                        if (confirmDelete) {
+                            deleteComment(index, null);
+                        }
+                    } else {
+                        alert('관리자 코드가 올바르지 않습니다.');
+                    }
+                };
+
+                buttonGroup.appendChild(editBtn);
+                buttonGroup.appendChild(deleteBtn);
+
+                li.appendChild(commentText);
+                li.appendChild(locationInfo);
+                li.appendChild(buttonGroup);
+                commentsList.appendChild(li);
+
+                addMarker(comment.location.lat, comment.location.lng, { ...comment, id: index });
+            });
+        }
+
+        async function updateComment(index, updatedComment) {
+            const response = await fetch(`/comments/${index}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(updatedComment)
+            });
+
+            if (response.ok) {
+                loadComments();
+            } else {
+                alert('코멘트를 수정하는 데 실패했습니다.');
+            }
+        }
+
+        async function deleteComment(index, marker) {
+            const response = await fetch(`/comments/${index}`, { method: 'DELETE' });
+
+            if (response.ok) {
+                if (marker) {
+                    map.removeLayer(marker);
+                }
+                location.reload();
+            } else {
+                alert('코멘트를 삭제하는 데 실패했습니다.');
+            }
+        }
+
+        socket.on('delete_comment', (index) => {
+            loadComments();
+        });
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>지역 정보 공유 시스템</h1>
+        <p>
+            지도를 클릭하면 핀이 추가되며, 지역에 대한 정보를 남길 수 있습니다.
+            <br>이미 남겨진 핀을 클릭하면 정보를 확인할 수 있습니다.
+            <br> 수정 및 삭제는 관리자만 가능하니 정보 작성 시 유의하시길 바랍니다.
+            <br> 부적절한 정보는 관리자에 의해 삭제될 수 있습니다.
+        </p>
+        <div id="map"></div>
+        <ul id="commentsList"></ul>
+    </div>
+</body>
+</html>
